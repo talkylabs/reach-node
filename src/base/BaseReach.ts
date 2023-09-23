@@ -1,0 +1,219 @@
+import RequestClient from "./RequestClient"; /* jshint ignore:line */
+import { HttpMethod } from "../interfaces"; /* jshint ignore:line */
+import { Headers } from "../http/request"; /* jshint ignore:line */
+
+const os = require("os"); /* jshint ignore:line */
+const url = require("url"); /* jshint ignore:line */
+const moduleInfo = require("../../package.json"); /* jshint ignore:line */
+const util = require("util"); /* jshint ignore:line */
+const RestException = require("../base/RestException"); /* jshint ignore:line */
+
+namespace Reach {
+  export interface ClientOpts {
+    httpClient?: RequestClient;
+    env?: NodeJS.ProcessEnv;
+    lazyLoading?: boolean;
+    logLevel?: string;
+    userAgentExtensions?: string[];
+    autoRetry?: boolean;
+    maxRetries?: number;
+  }
+
+  export interface RequestOpts {
+    method?: HttpMethod;
+    uri?: string;
+    username?: string;
+    password?: string;
+    headers?: Headers;
+    params?: object;
+    data?: object;
+    timeout?: number;
+    allowRedirects?: boolean;
+    logLevel?: string;
+  }
+
+  /* jshint ignore:start */
+  /**
+   * Parent class for Reach Client that implements request & validation logic
+   */
+
+  /* jshint ignore:end */
+
+  export class Client {
+    username: string;
+    password: string;
+    accountSid: string;
+    opts?: ClientOpts;
+    env?: NodeJS.ProcessEnv;
+    logLevel?: string;
+    autoRetry: boolean;
+    maxRetries?: number;
+    userAgentExtensions?: string[];
+    _httpClient?: RequestClient;
+
+    /* jshint ignore:start */
+    /**
+     * Create a BaseReach instance
+     *
+     * @param username -
+     *          The username used for authentication. This is normally account sid, but if using key/secret auth will be
+     *          the api key sid.
+     * @param password -
+     *          The password used for authentication. This is normally auth token, but if using key/secret auth will be
+     *          the secret.
+     * @param opts - The options argument
+     *
+     * @returns A new instance of BaseReach
+     */
+
+    /* jshint ignore:end */
+
+    constructor(username?: string, password?: string, opts?: ClientOpts) {
+      this.opts = opts || {};
+      this.env = this.opts.env || process.env;
+      this.username =
+        username ||
+        this.env.REACH_TALKYLABS_API_USER ||
+        (() => {
+          throw new Error("username is required");
+        })();
+      this.password =
+        password ||
+        this.env.REACH_TALKYLABS_API_KEY ||
+        (() => {
+          throw new Error("password is required");
+        })();
+      this.accountSid =  this.username;
+      this.logLevel = this.opts.logLevel || this.env.REACH_TALKYLABS_LOG_LEVEL;
+      this.autoRetry = this.opts.autoRetry || false;
+      this.maxRetries = this.opts.maxRetries;
+      this.userAgentExtensions = this.opts.userAgentExtensions || [];
+      this._httpClient = this.opts.httpClient;
+
+      if (this.opts.lazyLoading === false) {
+        this._httpClient = this.httpClient;
+      }
+
+    }
+
+    get httpClient() {
+      if (!this._httpClient) {
+        this._httpClient = new RequestClient({
+          autoRetry: this.autoRetry,
+          maxRetries: this.maxRetries,
+        });
+      }
+      return this._httpClient;
+    }
+
+    /* jshint ignore:start */
+    /**
+     * Makes a request to the Reach API using the configured http client.
+     * Authentication information is automatically added if none is provided.
+     *
+     * @param opts - The options argument
+     */
+
+    /* jshint ignore:end */
+
+    request(opts: RequestOpts): Promise<any> {
+      opts = opts || {};
+
+      if (!opts.method) {
+        throw new Error("method is required");
+      }
+
+      if (!opts.uri) {
+        throw new Error("uri is required");
+      }
+
+      const username = opts.username || this.username;
+      const password = opts.password || this.password;
+
+      const headers = opts.headers || {};
+
+      const pkgVersion = moduleInfo.version;
+      const osName = os.platform();
+      const osArch = os.arch();
+      const nodeVersion = process.version;
+
+      headers["User-Agent"] = util.format(
+        "reach-node/%s (%s %s) node/%s",
+        pkgVersion,
+        osName,
+        osArch,
+        nodeVersion
+      );
+      this.userAgentExtensions?.forEach((extension) => {
+        headers["User-Agent"] += ` ${extension}`;
+      });
+      headers["Accept-Charset"] = "utf-8";
+
+      if (opts.method === "post" && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+
+      if (!headers["Accept"]) {
+        headers["Accept"] = "application/json";
+      }
+
+      var uri = new url.URL(opts.uri);
+      uri.hostname = this.getHostname(uri.hostname);
+
+      return this.httpClient?.request({
+        method: opts.method,
+        uri: uri.href,
+        username: username,
+        password: password,
+        headers: headers,
+        params: opts.params,
+        data: opts.data,
+        timeout: opts.timeout,
+        allowRedirects: opts.allowRedirects,
+        logLevel: opts.logLevel,
+      });
+    }
+
+    /* jshint ignore:start */
+    /**
+     * Adds a region and/or edge to a given hostname
+     *
+     * @param hostname - A URI hostname (e.g. api.reach.talkylabs.com)
+     */
+
+    /* jshint ignore:end */
+
+    getHostname(
+      hostname: string
+    ) {
+      return hostname;
+    }
+
+    /* jshint ignore:start */
+    /**
+     * Validates that a request to the new SSL certificate is successful.
+     *
+     * @throws RestException if the request fails
+     *
+     */
+
+    /* jshint ignore:end */
+
+    validateSslCert() {
+      return this.httpClient
+        ?.request({
+          method: "get",
+          uri: "https://api.reach.talkylabs.com:8443",
+        })
+        .then((response: any) => {
+          if (response["statusCode"] < 200 || response["statusCode"] >= 300) {
+            throw new RestException(response);
+          }
+
+          return response;
+        });
+    }
+  }
+}
+
+export = Reach;
